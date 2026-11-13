@@ -129,4 +129,10 @@ pytest
 
 ## Personal Reflections
 
-_TODO:_
+ In HW2 my code was a few scripts that only worked for Serena Williams. Her birth date, the file path, and the plot title were all hard-coded. Turning that into a package forced me to think about what changes from player to player (name, birth date, file format) and what stays the same (parsing, computing ages, plotting). Most of the HW2 logic carried over, but it had to be broken into small, general functions.
+
+The 20-line limit (and the 10-line target for private functions) felt restrictive at first, but it made the code easier to test and debug. Each helper does one thing: normalize a name, parse the JS array, compute ages. That made it obvious where to look when something broke.
+
+I hadn't thought before about tests depending on a live website. If tennisabstract.com is down or its data changes, the tests shouldn't fail. Using the mock JS files and swapping the download function for a fake one let me test the parsing and the error message for an unknown player without making any requests. This only worked because the one function that touches the network was kept separate from everything else.
+
+The data was messier than expected. Women's files store the opponent's birth date while men's files store the opponent's age, and I couldn't simply assume one format per gender: some recent men's matches used birth dates too. I also found that the "Career" file doesn't always contain the whole career. Recent matches live in a second file, and some players (like Jannik Sinner) have no career file at all. And some names don't match what you'd expect: Carlos Alcaraz is listed as "Carlos Alcaraz Garfia." Checking real data, not just the examples in the instructions, was important.
