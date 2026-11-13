@@ -85,9 +85,22 @@ def test_parse_matches(filename, row_length):
     assert all(len(row) == row_length for row in rows)
 
 
-def test_parse_matches_rejects_bad_text():
-    with pytest.raises(ValueError):
-        data._parse_matches("<html>Not Found</html>")
+def test_parse_matches_missing_variable_returns_empty():
+    assert data._parse_matches("<html>Not Found</html>") == []
+    assert data._parse_matches("") == []
+
+
+def test_parse_matches_picks_requested_variable():
+    js_text = ('var matchmx = [["20240101", "A"]];\n'
+               'var morematchmx = [["20200101", "B"]];')
+    assert data._parse_matches(js_text, "matchmx") == [["20240101", "A"]]
+    assert data._parse_matches(js_text) == [["20200101", "B"]]
+
+
+def test_parse_full_name():
+    assert data._parse_full_name("var fullname = 'Rafael Nadal';",
+                                 "RafaelNadal") == "Rafael Nadal"
+    assert data._parse_full_name("no name here", "RafaelNadal") == "RafaelNadal"
 
 
 def test_parse_birth_date():
@@ -121,11 +134,13 @@ def test_male_opponent_ages_passed_through():
 ])
 def test_final_frame_structure(filename, birth_date):
     matches = build_matches(filename, birth_date)
-    assert list(matches.columns) == ["date", "opponent", "result",
-                                     "player_age", "opponent_age", "age_diff"]
+    assert {"date", "tournament", "surface", "round", "result", "score",
+            "opponent", "opponent_rank", "player_age", "opponent_age",
+            "age_difference"} <= set(matches.columns)
+    assert "opponent_info" not in matches.columns
     assert len(matches) == 3
     assert set(matches["result"]) <= {"W", "L"}
-    assert matches["age_diff"].tolist() == pytest.approx(
+    assert matches["age_difference"].tolist() == pytest.approx(
         (matches["player_age"] - matches["opponent_age"]).tolist())
 
 
@@ -141,3 +156,54 @@ def test_rows_missing_opponent_age_are_dropped():
     matches = data._add_ages(data._rows_to_frame(rows), NADAL_DOB)
     assert len(matches) == 2
     assert "Stefano Galvani" not in matches["opponent"].tolist()
+
+
+# --- get_player_matches (network is mocked with the fixture files) ---------
+
+FAKE_PROFILE = """
+    var fullname = 'Rafael Nadal';
+    dob=19860603;
+    var matchmx = [["20170102", "Brisbane", "Hard", "A", "W", "", "", "1", "R16", "6-3 6-3", "3", "Mischa Zverev", "50", "", "", "L", "29.4", "", "GER"]];
+"""
+
+
+def fake_site(files):
+    """Stand-in for _fetch_text: return files[filename], or None (404)."""
+    return lambda url: files.get(url.rsplit("/", 1)[-1])
+
+
+def test_get_player_matches_combines_career_and_recent(monkeypatch):
+    monkeypatch.setattr(data, "_fetch_text", fake_site({
+        "RafaelNadal.js": FAKE_PROFILE,
+        "RafaelNadalCareer.js": read_fixture("MalePlayerCareer.js"),
+    }))
+    matches = data.get_player_matches("rafael nadal")
+    assert list(matches.columns) == data.COLUMNS
+    assert len(matches) == 4
+    assert matches["year"].tolist() == [2001, 2001, 2001, 2017]
+    assert matches["opponent_rank"].iloc[0] == 731
+    assert (matches["player"] == "Rafael Nadal").all()
+    assert matches["date"].is_monotonic_increasing
+    assert matches["opponent"].iloc[-1] == "Mischa Zverev"
+
+
+def test_get_player_matches_without_career_file(monkeypatch):
+    monkeypatch.setattr(data, "_fetch_text",
+                        fake_site({"RafaelNadal.js": FAKE_PROFILE}))
+    assert len(data.get_player_matches("Rafael Nadal")) == 1
+
+
+def test_get_player_matches_drops_duplicate_matches(monkeypatch):
+    career = read_fixture("MalePlayerCareer.js")
+    profile = FAKE_PROFILE + career.replace("morematchmx", "matchmx", 1)
+    profile = profile.replace("var matchmx", "var unused", 1)
+    monkeypatch.setattr(data, "_fetch_text", fake_site({
+        "RafaelNadal.js": profile, "RafaelNadalCareer.js": career}))
+    assert len(data.get_player_matches("RafaelNadal")) == 3
+
+
+@pytest.mark.parametrize("bad_name", ["Gaston Sanchez", "GastonSanchez"])
+def test_get_player_matches_unknown_player(monkeypatch, bad_name):
+    monkeypatch.setattr(data, "_fetch_text", fake_site({}))
+    with pytest.raises(ValueError, match="not found on tennisabstract.com"):
+        data.get_player_matches(bad_name)
